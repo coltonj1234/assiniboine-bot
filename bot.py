@@ -15,35 +15,44 @@ def send(msg):
         data={"chat_id": CHAT_ID, "text": msg}
     )
 
-def get_site_state(driver):
+def extract_signals(driver):
     """
-    Sniper logic:
-    Instead of keywords, we detect actual result containers.
+    ACCURACY LOGIC:
+    We only look at *result-level containers*, not raw page text.
     """
 
-    cards = driver.find_elements("css selector", "div, section, li")
+    # Try to grab structured "result-like" elements
+    elements = driver.find_elements("css selector", "div, li, section")
 
-    visible_text = []
+    signals = []
 
-    for c in cards:
+    for e in elements:
         try:
-            t = c.text.strip().lower()
-            if len(t) > 0:
-                visible_text.append(t)
+            text = e.text.strip().lower()
+
+            # ignore empty / navigation noise
+            if len(text) < 15:
+                continue
+
+            # strong indicators only (NOT UI words)
+            if any(keyword in text for keyword in [
+                "site",
+                "campsite",
+                "available",
+                "night",
+                "$"
+            ]):
+                signals.append(text)
+
         except:
             continue
 
-    # Heuristic: look for actual "bookable structure change"
-    has_booking_signals = any(
-        ("select" in t or "choose" in t or "site" in t)
-        for t in visible_text
-    )
-
-    return has_booking_signals
+    # remove duplicates
+    return list(set(signals))
 
 
 options = webdriver.ChromeOptions()
-options.add_argument("--headless=new")  # runs in background (important for GitHub)
+options.add_argument("--headless=new")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
 
@@ -54,19 +63,23 @@ driver = webdriver.Chrome(
 
 driver.get(URL)
 
-last_state = None
+last_signature = None
 
-def check():
-    global last_state
+def run_check():
+    global last_signature
 
     driver.refresh()
 
-    state = get_site_state(driver)
+    signals = extract_signals(driver)
 
-    if state and last_state is False:
-        send("🔥 ASSINIBOINE SNIPER ALERT — possible availability detected")
+    signature = "|".join(sorted(signals))
 
-    last_state = state
+    # ONLY trigger on real change in structured results
+    if last_signature and signature != last_signature:
+        if len(signals) > 0:
+            send("🔥 BC Parks UPDATE — possible real availability change detected")
+
+    last_signature = signature
 
 
-check()
+run_check()
