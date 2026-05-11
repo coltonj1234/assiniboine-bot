@@ -1,8 +1,8 @@
+import os
 import requests
-import time
 
-BOT_TOKEN = "PASTE_TOKEN_HERE"
-CHAT_ID = "PASTE_CHAT_ID_HERE"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 URL = "https://camping.bcparks.ca/"
 
@@ -12,27 +12,8 @@ def send(msg):
         data={"chat_id": CHAT_ID, "text": msg}
     )
 
-def check():
-    r = requests.get(URL, timeout=20)
-    text = r.text.lower()
+r = requests.get(URL, timeout=20)
+text = r.text.lower()
 
-    # simple but stable signal
-    if "select" in text or "reserve" in text:
-        return True
-    return False
-
-last = False
-
-while True:
-    try:
-        now = check()
-
-        if now and not last:
-            send("🔥 BC Parks change detected — check Assiniboine now!")
-
-        last = now
-
-    except Exception as e:
-        print(e)
-
-    time.sleep(60)
+if "select" in text or "reserve" in text:
+    send("🔥 BC Parks change detected — check Assiniboine now!")
