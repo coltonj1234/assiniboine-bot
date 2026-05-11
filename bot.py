@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import hashlib
 from datetime import datetime
@@ -7,21 +8,23 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 # =========================
-# TARGET WINDOW
+# CONFIG
 # =========================
 
-ARRIVAL = "2026-08-11"
-DEPARTURE = "2026-08-13"
-
-TARGET_LABEL = "Assiniboine Aug 11–13 Window"
+BASE_URL = "https://camping.bcparks.ca/"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-BASE_URL = "https://camping.bcparks.ca/"
+CAMPGROUND_KEYWORDS = ["magog", "og", "assiniboine"]
+
+NIGHT_WINDOWS = [
+    ("2026-08-11", "2026-08-12"),
+    ("2026-08-12", "2026-08-13")
+]
 
 # =========================
-# ALERT SYSTEM
+# TELEGRAM
 # =========================
 
 def send(msg):
@@ -34,43 +37,36 @@ def send(msg):
         pass
 
 # =========================
-# STATE HASH
+# HASH
 # =========================
 
 def hash_text(t):
     return hashlib.sha256(t.encode("utf-8")).hexdigest()
 
 # =========================
-# DATE-WINDOW SIGNAL CHECK
+# DETECTION LOGIC
 # =========================
 
-def detect_date_window_availability(text):
-    """
-    We are looking for *window-compatible booking signals*.
-    This is the closest possible proxy without API access.
-    """
-
+def detect_availability(text):
     text = text.lower()
 
-    # strong booking indicators
-    strong_signals = [
+    strong = [
         "select site",
         "available",
-        "night",
-        "campsite",
         "book",
-        "reserve"
+        "reserve",
+        "campsite",
+        "site details"
     ]
 
-    score = sum(1 for s in strong_signals if s in text)
+    score = sum(1 for s in strong if s in text)
 
-    # must show structured booking UI
-    has_booking_ui = "site" in text or "campsite" in text
+    campground_match = any(k in text for k in CAMPGROUND_KEYWORDS)
 
-    return score, has_booking_ui
+    return score, campground_match
 
 # =========================
-# BROWSER SETUP
+# BROWSER
 # =========================
 
 options = webdriver.ChromeOptions()
@@ -86,44 +82,45 @@ driver = webdriver.Chrome(
 driver.get(BASE_URL)
 
 last_hash = None
-last_score = 0
 
 # =========================
-# MAIN SCAN LOOP
+# SCAN
 # =========================
 
 def scan():
-    global last_hash, last_score
+    global last_hash
 
     driver.refresh()
-
-    # wait for JS load
-    driver.implicitly_wait(5)
+    time.sleep(5)
 
     body = driver.find_element("tag name", "body").text.lower()
-
 
     if len(body) < 500:
         return
 
     current_hash = hash_text(body)
-    score, ui = detect_date_window_availability(body)
-
-    now = datetime.now().strftime("%H:%M:%S")
+    score, campground_match = detect_availability(body)
 
     changed = last_hash and current_hash != last_hash
 
-    # TRUE DATE WINDOW RULE
-    if changed and ui and score >= 3 and score > last_score:
-        send(
-            f"🔥 TRUE DATE WINDOW MATCH\n"
-            f"{TARGET_LABEL}\n"
-            f"{ARRIVAL} → {DEPARTURE}\n"
-            f"Time: {now}\n\n"
-            f"Possible availability detected — CHECK IMMEDIATELY"
-        )
+    now = datetime.now().strftime("%H:%M:%S")
+
+    # only alert on meaningful change + real booking structure
+    if changed and score >= 3 and campground_match:
+
+        for arrival, departure in NIGHT_WINDOWS:
+            send(
+                f"🏕 ASSINIBOINE UPDATE\n"
+                f"{arrival} → {departure}\n"
+                f"Campground signal detected (Magog/Og likely present)\n"
+                f"Time: {now}\n\n"
+                f"Check BC Parks immediately."
+            )
 
     last_hash = current_hash
-    last_score = score
+
+# =========================
+# RUN
+# =========================
 
 scan()
