@@ -1,5 +1,6 @@
 import os
 import requests
+import hashlib
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -15,41 +16,8 @@ def send(msg):
         data={"chat_id": CHAT_ID, "text": msg}
     )
 
-def extract_signals(driver):
-    """
-    ACCURACY LOGIC:
-    We only look at *result-level containers*, not raw page text.
-    """
-
-    # Try to grab structured "result-like" elements
-    elements = driver.find_elements("css selector", "div, li, section")
-
-    signals = []
-
-    for e in elements:
-        try:
-            text = e.text.strip().lower()
-
-            # ignore empty / navigation noise
-            if len(text) < 15:
-                continue
-
-            # strong indicators only (NOT UI words)
-            if any(keyword in text for keyword in [
-                "site",
-                "campsite",
-                "available",
-                "night",
-                "$"
-            ]):
-                signals.append(text)
-
-        except:
-            continue
-
-    # remove duplicates
-    return list(set(signals))
-
+def hash_page(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 options = webdriver.ChromeOptions()
 options.add_argument("--headless=new")
@@ -63,21 +31,34 @@ driver = webdriver.Chrome(
 
 driver.get(URL)
 
-last_signature = None
+last_hash = None
 
-def run_check():
-    global last_signature
+def scan():
+    global last_hash
 
     driver.refresh()
 
-    signals = extract_signals(driver)
+    # wait for JS load
+    driver.implicitly_wait(5)
 
-    signature = "|".join(sorted(signals))
+    # ONLY capture meaningful rendered content
+    body_text = driver.find_element("tag name", "body").text.lower()
 
-    # ONLY trigger on real change in structured results
-    if last_signature and signature != last_signature:
-        if len(signals) > 0:
-            send("🔥 BC Parks UPDATE — possible real availability change detected")
+    # filter out tiny/noisy pages
+    if len(body_text) < 500:
+        return
+
+    current_hash = hash_page(body_text)
+
+    # detect real change in content
+    if last_hash and current_hash != last_hash:
+        if any(x in body_text for x in ["site", "night", "available", "select"]):
+            send("🔥 BC PARKS CHANGE DETECTED — check Assiniboine immediately")
+
+    last_hash = current_hash
+
+
+scan()
 
     last_signature = signature
 
