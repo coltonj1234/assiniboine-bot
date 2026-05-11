@@ -11,59 +11,59 @@ from webdriver_manager.chrome import ChromeDriverManager
 # CONFIG
 # =========================
 
-BASE_URL = "https://camping.bcparks.ca/"
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-CAMPGROUND_KEYWORDS = ["magog", "og", "assiniboine"]
+WINDOWS = {
+    "Aug 11–12": "https://camping.bcparks.ca/create-booking/results?startDate=2026-08-11&endDate=2026-08-12",
+    "Aug 12–13": "https://camping.bcparks.ca/create-booking/results?startDate=2026-08-12&endDate=2026-08-13",
+}
 
-NIGHT_WINDOWS = [
-    ("2026-08-11", "2026-08-12"),
-    ("2026-08-12", "2026-08-13")
+WATCH_TERMS = [
+    "magog",
+    "og",
+    "select site",
+    "available",
+    "reserve",
+    "book",
+    "site details"
 ]
 
 # =========================
-# TELEGRAM
+# TELEGRAM ALERT
 # =========================
 
-def send(msg):
+def send_alert(window_name, url):
+    now = datetime.now().strftime("%H:%M:%S")
+
+    message = (
+        f"🏕 ASSINIBOINE ALERT\n"
+        f"{window_name}\n"
+        f"Time: {now}\n\n"
+        f"OPEN NOW:\n{url}"
+    )
+
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": msg}
+            data={"chat_id": CHAT_ID, "text": message}
         )
     except:
         pass
 
 # =========================
-# HASH
+# HELPERS
 # =========================
 
-def hash_text(t):
-    return hashlib.sha256(t.encode("utf-8")).hexdigest()
+def hash_text(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-# =========================
-# DETECTION LOGIC
-# =========================
-
-def detect_availability(text):
+def score_text(text):
     text = text.lower()
+    return sum(1 for t in WATCH_TERMS if t in text)
 
-    strong = [
-        "select site",
-        "available",
-        "book",
-        "reserve",
-        "campsite",
-        "site details"
-    ]
-
-    score = sum(1 for s in strong if s in text)
-
-    campground_match = any(k in text for k in CAMPGROUND_KEYWORDS)
-
-    return score, campground_match
+def valid_page(text):
+    return len(text) > 800 and "bc parks" in text.lower()
 
 # =========================
 # BROWSER
@@ -79,48 +79,46 @@ driver = webdriver.Chrome(
     options=options
 )
 
-driver.get(BASE_URL)
-
-last_hash = None
+last_state = {}
 
 # =========================
-# SCAN
+# SCAN WINDOW
 # =========================
 
-def scan():
-    global last_hash
+def scan_window(name, url):
+    driver.get(url)
+    time.sleep(6)
 
-    driver.refresh()
-    time.sleep(5)
+    text = driver.find_element("tag name", "body").text.lower()
 
-    body = driver.find_element("tag name", "body").text.lower()
+    if not valid_page(text):
+        return None
 
-    if len(body) < 500:
-        return
-
-    current_hash = hash_text(body)
-    score, campground_match = detect_availability(body)
-
-    changed = last_hash and current_hash != last_hash
-
-    now = datetime.now().strftime("%H:%M:%S")
-
-    # only alert on meaningful change + real booking structure
-    if changed and score >= 3 and campground_match:
-
-        for arrival, departure in NIGHT_WINDOWS:
-            send(
-                f"🏕 ASSINIBOINE UPDATE\n"
-                f"{arrival} → {departure}\n"
-                f"Campground signal detected (Magog/Og likely present)\n"
-                f"Time: {now}\n\n"
-                f"Check BC Parks immediately."
-            )
-
-    last_hash = current_hash
+    return {
+        "hash": hash_text(text),
+        "score": score_text(text)
+    }
 
 # =========================
-# RUN
+# MAIN LOOP
 # =========================
 
-scan()
+def run():
+    global last_state
+
+    for name, url in WINDOWS.items():
+
+        data = scan_window(name, url)
+        if not data:
+            continue
+
+        prev = last_state.get(name)
+        changed = not prev or prev["hash"] != data["hash"]
+
+        # only alert on real signal + meaningful change
+        if changed and data["score"] >= 3:
+            send_alert(name, url)
+
+        last_state[name] = data
+
+run()
