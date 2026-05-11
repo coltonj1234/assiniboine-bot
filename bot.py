@@ -102,7 +102,6 @@ def scan():
 
     body = driver.find_element("tag name", "body").text.lower()
 
-    send("TEST: Telegram connection works")
 
     if len(body) < 500:
         return
