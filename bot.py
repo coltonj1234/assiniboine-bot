@@ -1,26 +1,30 @@
 import os
 import requests
 import hashlib
-import webbrowser
-import time
-from collections import deque
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+# =========================
+# TARGET WINDOW
+# =========================
+
+ARRIVAL = "2026-08-11"
+DEPARTURE = "2026-08-13"
+
+TARGET_LABEL = "Assiniboine Aug 11–13 Window"
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-BASE = "https://camping.bcparks.ca/"
-MAGOG = BASE
-OG = BASE
+BASE_URL = "https://camping.bcparks.ca/"
 
 # =========================
-# ALERT
+# ALERT SYSTEM
 # =========================
 
-def alert(msg):
+def send(msg):
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -30,42 +34,43 @@ def alert(msg):
         pass
 
 # =========================
-# EXECUTION LOCK MODE
+# STATE HASH
 # =========================
 
-def execution_lock():
-    now = datetime.now().strftime("%H:%M:%S")
-
-    msg = f"""
-🔥 ASSINIBOINE EXECUTION LOCK
-Time: {now}
-
-BOOK IMMEDIATELY
-"""
-    alert(msg)
-
-    # Open everything repeatedly (attention lock)
-    for _ in range(2):
-        webbrowser.open(BASE)
-        webbrowser.open(MAGOG)
-        webbrowser.open(OG)
-
-    # repeated alerts (prevents missed notification)
-    for i in range(6):
-        print("🚨 EXECUTION MODE ACTIVE 🚨")
-        time.sleep(20)
+def hash_text(t):
+    return hashlib.sha256(t.encode("utf-8")).hexdigest()
 
 # =========================
-# STATE MEMORY (UPGRADE)
+# DATE-WINDOW SIGNAL CHECK
 # =========================
 
-history = deque(maxlen=10)
+def detect_date_window_availability(text):
+    """
+    We are looking for *window-compatible booking signals*.
+    This is the closest possible proxy without API access.
+    """
 
-def hash_page(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    text = text.lower()
+
+    # strong booking indicators
+    strong_signals = [
+        "select site",
+        "available",
+        "night",
+        "campsite",
+        "book",
+        "reserve"
+    ]
+
+    score = sum(1 for s in strong_signals if s in text)
+
+    # must show structured booking UI
+    has_booking_ui = "site" in text or "campsite" in text
+
+    return score, has_booking_ui
 
 # =========================
-# DRIVER
+# BROWSER SETUP
 # =========================
 
 options = webdriver.ChromeOptions()
@@ -78,31 +83,46 @@ driver = webdriver.Chrome(
     options=options
 )
 
-driver.get(BASE)
+driver.get(BASE_URL)
+
+last_hash = None
+last_score = 0
+
+# =========================
+# MAIN SCAN LOOP
+# =========================
 
 def scan():
+    global last_hash, last_score
+
     driver.refresh()
-    time.sleep(4)
+
+    # wait for JS load
+    driver.implicitly_wait(5)
 
     body = driver.find_element("tag name", "body").text.lower()
 
     if len(body) < 500:
         return
 
-    state_hash = hash_page(body)
-    history.append(state_hash)
+    current_hash = hash_text(body)
+    score, ui = detect_date_window_availability(body)
 
-    # only act if we have movement across history
-    unique_changes = len(set(history))
+    now = datetime.now().strftime("%H:%M:%S")
 
-    signals = sum([
-        "site" in body,
-        "available" in body,
-        "select" in body,
-        "reserve" in body
-    ])
+    changed = last_hash and current_hash != last_hash
 
-    if unique_changes >= 2 and signals >= 2:
-        execution_lock()
+    # TRUE DATE WINDOW RULE
+    if changed and ui and score >= 3 and score > last_score:
+        send(
+            f"🔥 TRUE DATE WINDOW MATCH\n"
+            f"{TARGET_LABEL}\n"
+            f"{ARRIVAL} → {DEPARTURE}\n"
+            f"Time: {now}\n\n"
+            f"Possible availability detected — CHECK IMMEDIATELY"
+        )
+
+    last_hash = current_hash
+    last_score = score
 
 scan()
